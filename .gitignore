@@ -36,3 +36,5 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # Data files (CSVs and built database)
 data/
 *.duckdb
+
+.wrangler
