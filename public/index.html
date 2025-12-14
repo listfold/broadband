@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hello World</title>
+  <script type="module" src="./client.ts"></script>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 600px;
+      margin: 50px auto;
+      text-align: center;
+    }
+    .counter {
+      margin-top: 2rem;
+      padding: 2rem;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+    }
+    button {
+      padding: 0.5rem 1rem;
+      margin: 0 0.25rem;
+      font-size: 1.2rem;
+      cursor: pointer;
+    }
+    .count {
+      font-size: 3rem;
+      margin: 1rem 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>Hello World</h1>
+
+  <div class="counter" x-data="{ count: 0 }">
+    <h2>Counter</h2>
+    <div class="count" x-text="count"></div>
+    <button @click="count--">-</button>
+    <button @click="count++">+</button>
+  </div>
+</body>
+</html>
