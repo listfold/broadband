@@ -1,0 +1,71 @@
+name: Build DuckDB
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_to_r2:
+        description: 'Upload to Cloudflare R2 (requires R2 secrets)'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  DB_PATH: ./data/broadband.duckdb
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      # Download CSVs from R2 if configured
+      - name: Download CSVs from R2
+        if: ${{ inputs.upload_to_r2 == 'true' }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          # Install AWS CLI
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip -q awscliv2.zip
+          sudo ./aws/install
+
+          # Sync CSVs from R2
+          aws s3 sync s3://broadband-data/raw/ ./data/ --endpoint-url $R2_ENDPOINT
+
+      - name: Build database
+        run: bun scripts/build-db.ts
+
+      - name: Show database info
+        run: |
+          ls -lh ${{ env.DB_PATH }}
+
+      # Upload to R2 if configured
+      - name: Upload to R2
+        if: ${{ inputs.upload_to_r2 == 'true' }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          aws s3 cp ${{ env.DB_PATH }} s3://broadband-data/db/broadband.duckdb --endpoint-url $R2_ENDPOINT
+          echo "Database uploaded to R2"
+
+      # Always upload as GitHub artifact (for download or as fallback)
+      - name: Upload database artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: broadband-db
+          path: ${{ env.DB_PATH }}
+          retention-days: 90
+          if-no-files-found: error
