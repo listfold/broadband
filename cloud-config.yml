@@ -1,0 +1,307 @@
+#cloud-config
+
+# =============================================================================
+# Hetzner Cloud-Config for Broadband Factsheet App
+# Paste this into the "Cloud config" field when creating a new Hetzner server
+# =============================================================================
+
+users:
+  - name: deploy
+    groups: users, admin, docker
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_import_id:
+      - gh:imaitland
+
+packages:
+  - docker.io
+  - docker-compose-v2
+  - nginx
+  - fail2ban
+  - ufw
+  - curl
+  - jq
+
+package_update: true
+package_upgrade: true
+
+write_files:
+  # SSH hardening
+  - path: /etc/ssh/sshd_config.d/hardening.conf
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+      MaxAuthTries 3
+      AllowTcpForwarding no
+      X11Forwarding no
+      AllowAgentForwarding no
+      AuthorizedKeysFile .ssh/authorized_keys
+      AllowUsers deploy
+
+  # Nginx main config with rate limiting
+  - path: /etc/nginx/nginx.conf
+    content: |
+      user www-data;
+      worker_processes auto;
+      pid /run/nginx.pid;
+      error_log /var/log/nginx/error.log;
+
+      events {
+          worker_connections 1024;
+          use epoll;
+          multi_accept on;
+      }
+
+      http {
+          # Basic settings
+          sendfile on;
+          tcp_nopush on;
+          tcp_nodelay on;
+          keepalive_timeout 65;
+          types_hash_max_size 2048;
+          server_tokens off;
+
+          include /etc/nginx/mime.types;
+          default_type application/octet-stream;
+
+          # Logging
+          access_log /var/log/nginx/access.log;
+
+          # Rate limiting zones
+          limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+          limit_conn_zone $binary_remote_addr zone=addr:10m;
+
+          # DDoS protection - limit request body size
+          client_max_body_size 1m;
+          client_body_timeout 10s;
+          client_header_timeout 10s;
+
+          # Gzip
+          gzip on;
+          gzip_vary on;
+          gzip_proxied any;
+          gzip_comp_level 6;
+          gzip_types text/plain text/css text/xml application/json application/javascript application/xml;
+
+          include /etc/nginx/conf.d/*.conf;
+          include /etc/nginx/sites-enabled/*;
+      }
+
+  # Nginx site config
+  - path: /etc/nginx/sites-available/broadband-app
+    content: |
+      upstream app {
+          server 127.0.0.1:3000;
+          keepalive 32;
+      }
+
+      server {
+          listen 80 default_server;
+          listen [::]:80 default_server;
+          server_name _;
+
+          # Health check endpoint - no rate limiting
+          location /health {
+              proxy_pass http://app;
+              proxy_http_version 1.1;
+              proxy_set_header Connection "";
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_connect_timeout 5s;
+              proxy_read_timeout 10s;
+          }
+
+          # API and all other requests - with rate limiting
+          location / {
+              # Rate limiting: 10 req/s with burst of 20
+              limit_req zone=api burst=20 nodelay;
+              limit_conn addr 20;
+
+              proxy_pass http://app;
+              proxy_http_version 1.1;
+              proxy_set_header Connection "";
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+
+              # Timeouts
+              proxy_connect_timeout 10s;
+              proxy_send_timeout 30s;
+              proxy_read_timeout 30s;
+
+              # Buffer settings
+              proxy_buffering on;
+              proxy_buffer_size 4k;
+              proxy_buffers 8 4k;
+          }
+
+          # Block common attack patterns
+          location ~ /\. {
+              deny all;
+          }
+      }
+
+  # Fail2ban jail config
+  - path: /etc/fail2ban/jail.local
+    content: |
+      [DEFAULT]
+      bantime = 1h
+      findtime = 10m
+      maxretry = 5
+      banaction = iptables-multiport
+
+      [sshd]
+      enabled = true
+      port = ssh
+      maxretry = 3
+      bantime = 24h
+
+      [nginx-req-limit]
+      enabled = true
+      filter = nginx-req-limit
+      action = iptables-multiport[name=ReqLimit, port="http,https"]
+      logpath = /var/log/nginx/error.log
+      findtime = 1m
+      maxretry = 10
+      bantime = 1h
+
+  # Fail2ban filter for nginx rate limiting
+  - path: /etc/fail2ban/filter.d/nginx-req-limit.conf
+    content: |
+      [Definition]
+      failregex = limiting requests, excess:.* by zone.*client: <HOST>
+      ignoreregex =
+
+  # Sysctl hardening for DDoS protection
+  - path: /etc/sysctl.d/99-security.conf
+    content: |
+      # SYN flood protection
+      net.ipv4.tcp_syncookies = 1
+      net.ipv4.tcp_max_syn_backlog = 2048
+      net.ipv4.tcp_synack_retries = 2
+      net.ipv4.tcp_syn_retries = 5
+
+      # Connection tracking
+      net.netfilter.nf_conntrack_max = 131072
+
+      # TIME_WAIT sockets
+      net.ipv4.tcp_tw_reuse = 1
+      net.ipv4.tcp_fin_timeout = 15
+
+      # Ignore ICMP broadcasts
+      net.ipv4.icmp_echo_ignore_broadcasts = 1
+
+      # Ignore bogus ICMP errors
+      net.ipv4.icmp_ignore_bogus_error_responses = 1
+
+      # Disable source routing
+      net.ipv4.conf.all.accept_source_route = 0
+      net.ipv4.conf.default.accept_source_route = 0
+
+      # Reverse path filtering
+      net.ipv4.conf.all.rp_filter = 1
+      net.ipv4.conf.default.rp_filter = 1
+
+  # Docker compose for the app
+  - path: /opt/broadband-app/docker-compose.yml
+    content: |
+      services:
+        app:
+          image: ghcr.io/listfold/broadband_factsheet:latest
+          container_name: broadband-app
+          restart: unless-stopped
+          ports:
+            - "127.0.0.1:3000:3000"
+          environment:
+            - NODE_ENV=production
+            - DB_PATH=${DB_PATH}
+          volumes:
+            - ./data:/app/data
+
+  # Deploy script
+  - path: /opt/broadband-app/deploy.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -e
+
+      cd /opt/broadband-app
+
+      echo "==> Pulling latest image..."
+      docker compose pull
+
+      echo "==> Stopping current container..."
+      docker compose down || true
+
+      echo "==> Starting new container..."
+      docker compose up -d
+
+      echo "==> Waiting for health check..."
+      for i in {1..30}; do
+          if curl -sf http://localhost:3000/health > /dev/null 2>&1; then
+              echo "==> Health check passed!"
+              break
+          fi
+          if [ $i -eq 30 ]; then
+              echo "==> Health check failed after 30 attempts"
+              docker compose logs
+              exit 1
+          fi
+          echo "    Attempt $i/30..."
+          sleep 1
+      done
+
+      echo "==> Pruning old images..."
+      docker image prune -f
+
+      echo "==> Deployment complete!"
+
+  # Environment file template
+  - path: /opt/broadband-app/.env.example
+    content: |
+      # Hetzner Object Storage URL for DuckDB file
+      DB_PATH=https://fsn1.your-objectstorage.com/broadband-data/db/broadband.duckdb
+
+runcmd:
+  # Enable nginx site
+  - rm -f /etc/nginx/sites-enabled/default
+  - ln -sf /etc/nginx/sites-available/broadband-app /etc/nginx/sites-enabled/
+
+  # Apply sysctl settings
+  - sysctl -p /etc/sysctl.d/99-security.conf || true
+
+  # Configure UFW firewall
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw allow 80/tcp
+  - ufw --force enable
+
+  # Enable and start services
+  - systemctl enable docker
+  - systemctl start docker
+  - systemctl enable nginx
+  - systemctl start nginx
+  - systemctl enable fail2ban
+  - systemctl restart fail2ban
+
+  # Set ownership of app directory
+  - chown -R deploy:deploy /opt/broadband-app
+
+  # Add deploy user to docker group (ensure it takes effect)
+  - usermod -aG docker deploy
+
+  # Create data directory
+  - mkdir -p /opt/broadband-app/data
+  - chown deploy:deploy /opt/broadband-app/data
+
+  # Reload nginx to apply config
+  - nginx -t && systemctl reload nginx
+
+  # Final reboot to apply all changes
+  - reboot

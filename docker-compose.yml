@@ -1,10 +1,10 @@
 services:
   app:
-    image: ghcr.io/${GITHUB_REPOSITORY:-broadband_factsheet}:latest
+    image: ghcr.io/listfold/broadband_factsheet:latest
     container_name: broadband-app
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       - NODE_ENV=production
       - DB_PATH=${DB_PATH}

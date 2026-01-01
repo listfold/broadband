@@ -14,7 +14,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: listfold/broadband_factsheet
 
 jobs:
   build-and-push:
@@ -66,22 +66,8 @@ jobs:
           username: ${{ secrets.HETZNER_USER }}
           key: ${{ secrets.HETZNER_SSH_KEY }}
           script: |
-            cd /opt/broadband-app
-
             # Login to GHCR
-            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-            # Pull latest image
-            docker compose pull
-
-            # Restart with new image
-            docker compose up -d
-
-            # Clean up old images
-            docker image prune -f
-
-            # Health check
-            sleep 5
-            curl -f http://localhost:3000/health || exit 1
-
-            echo "Deployment complete!"
+            # Run deploy script (pull → stop → start → health check → prune)
+            /opt/broadband-app/deploy.sh
