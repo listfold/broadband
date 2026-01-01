@@ -3,6 +3,7 @@ import * as duckdb from 'duckdb'
 let db: duckdb.Database
 let conn: duckdb.Connection
 
+const NODE_ENV = process.env.NODE_ENV || 'development'
 const DB_PATH = process.env.DB_PATH || './data/broadband.duckdb'
 const LOCAL_DB_PATH = './data/broadband.duckdb'
 
@@ -27,7 +28,8 @@ export function runQuery<T = Record<string, unknown>>(sql: string): Promise<T[]>
 }
 
 export async function initDatabase(): Promise<void> {
-  console.log('Initializing DuckDB...')
+  console.log(`[${NODE_ENV}] Initializing DuckDB...`)
+  console.log(`[${NODE_ENV}] DB_PATH: ${DB_PATH}`)
 
   let dbPath = DB_PATH
 
